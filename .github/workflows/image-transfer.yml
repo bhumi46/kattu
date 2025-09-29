@@ -41,14 +41,14 @@ jobs:
           # From Google's go-containerregistry project
           curl -sL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | sudo tar -xzC /usr/local/bin crane
           crane version
-          echo "Crane installed successfully (Open Source - Apache 2.0)"
+          echo "✅ Crane installed successfully (Open Source - Apache 2.0)"
           
       - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
           pip install docker requests urllib3 PyYAML
           pip show docker
-          echo "Python dependencies installed"
+          echo "✅ Python dependencies installed"
           
       - name: Configure Docker for insecure registries
         run: |
@@ -69,7 +69,7 @@ jobs:
             sleep 5
           fi
           
-          echo "Docker configured for registry operations"
+          echo "✅ Docker configured for registry operations"
           
       - name: Update config.yml with dynamic registry detection
         run: |
@@ -83,52 +83,47 @@ jobs:
           sed -i "s|destination_organization:.*|destination_organization: ${{ inputs.DESTINATION_ORGANIZATION }}|g" config.yml
           sed -i "s|registry_url:.*|registry_url: ${{ inputs.REGISTRY_URL }}|g" config.yml
           
-          echo "Updated config.yml:"
+          echo "✅ Updated config.yml:"
           cat config.yml
           
-      - name: Login to Docker Hub
+      - name: Login to destination registry
         run: |
-          echo "${{ secrets.TOKEN }}" | docker login -u "${{ secrets.USERNAME }}" --password-stdin
-          echo "Docker Hub login successful"
-          
-      - name: Login to destination registry (if needed)
-        run: |
-          # Only login to destination registry if it requires authentication
+          # Login to destination registry (Harbor) for pushing images
           REGISTRY_HOST=$(echo "${{ inputs.REGISTRY_URL }}" | sed 's|http://||' | sed 's|https://||' | cut -d'/' -f1)
           echo "Destination registry: $REGISTRY_HOST"
           
-          # For Harbor or other registries that require authentication, add login here
-          # docker login $REGISTRY_HOST -u <username> -p <password>
+          # Login to Harbor registry with robot account credentials
+          echo "${{ secrets.TOKEN }}" | docker login $REGISTRY_HOST -u "${{ secrets.USERNAME }}" --password-stdin
           
-          echo "Registry login configured"
+          echo "✅ Harbor registry login successful"
           
       - name: Transfer images with multi-arch support
         run: |
           cd release/vidivi
-          echo "Starting image transfer with crane multi-arch support..."
+          echo "🚀 Starting image transfer with crane multi-arch support..."
           
           # Run vidivi with enhanced logging
           python3 vidivi.py push 2>&1 | tee transfer.log
           
           # Display summary
-          echo "Transfer Summary:"
+          echo "📊 Transfer Summary:"
           grep -E "(Successfully transferred|Error in|Completed)" logs/vidivi.log | tail -20 || echo "No summary available"
           
       - name: Verify multi-arch transfers
         run: |
           cd release/vidivi
-          echo "Verifying multi-arch transfers..."
+          echo "🔍 Verifying multi-arch transfers..."
           
           # Check if crane transfers were successful
           CRANE_SUCCESS=$(grep -c "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log || echo "0")
           TOTAL_SUCCESS=$(grep -c "Completed.*----->" logs/vidivi.log || echo "0")
           
-          echo "Multi-arch transfers (crane): $CRANE_SUCCESS"
-          echo "Total successful transfers: $TOTAL_SUCCESS"
+          echo "✅ Multi-arch transfers (crane): $CRANE_SUCCESS"
+          echo "✅ Total successful transfers: $TOTAL_SUCCESS"
           
           # List successful crane transfers
           if [ "$CRANE_SUCCESS" -gt 0 ]; then
-            echo "Multi-arch images transferred:"
+            echo "🚀 Multi-arch images transferred:"
             grep -B5 "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log | grep "Executing: crane" | sed 's/.*crane copy [^[:space:]]* //' | sed 's/ .*//' || echo "Could not extract image list"
           fi
           
@@ -151,9 +146,9 @@ jobs:
           - **Failed transfers**: $(grep -c "ERROR.*Failed to get manifest\|ERROR.*does not exist\|ERROR.*Crane transfer failed" logs/vidivi.log || echo "0")
           
           ## Tools Used
-          - Crane (Apache 2.0): Multi-arch manifest list transfers
-          - Docker Python Client: Single-arch fallback transfers
-          - Registry Support: HTTP/HTTPS auto-detection
+          - ✅ Crane (Apache 2.0): Multi-arch manifest list transfers
+          - ✅ Docker Python Client: Single-arch fallback transfers
+          - ✅ Registry Support: HTTP/HTTPS auto-detection
           
           ## Crane Multi-Arch Images
           EOF
@@ -161,7 +156,7 @@ jobs:
           # Add crane transfer details
           grep -B5 "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log | grep "Executing: crane" | sed 's/.*crane copy [^[:space:]]* /- /' | sed 's/ .*//' >> transfer_report.md || echo "- No crane transfers found" >> transfer_report.md
           
-          echo "Transfer report generated"
+          echo "✅ Transfer report generated"
           cat transfer_report.md
           
       - name: Commit and push vidivi log
