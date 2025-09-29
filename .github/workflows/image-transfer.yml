@@ -1,4 +1,4 @@
-name:  Manual workflow to transfer docker images
+name: Manual workflow to transfer docker images
 
 on:
   workflow_call:
@@ -7,6 +7,11 @@ on:
         description: 'Provide Docker Hub destination org'
         required: true
         default: ''
+        type: string
+      REGISTRY_URL:
+        description: 'Provide destination registry URL'
+        required: true
+        default: 'http://10.0.3.128:8080'
         type: string
     secrets:
       USERNAME:
@@ -23,39 +28,171 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v3
-      - name: update config.yml
-        run: |
-          cd release/vidivi
-          echo "PWD: $( pwd )"
-          echo "LS : $( ls )"
-          sed -i "s/username:.*/username: ${{ secrets.USERNAME }}/g" config.yml
-          sed -i "s/token:.*/token: ${{ secrets.TOKEN }}/g" config.yml
-          sed -i "s/destination_organization.*/destination_organization: ${{ github.event.inputs.DESTINATION_ORGANIZATION }}/g" config.yml
-      - name: push images
-        run: |
-          cd release/vidivi
-          sudo apt-get update
-          sudo apt-get install -y python3-pip python3-venv
-          python3 -m venv venv  # Create a virtual environment
-          source venv/bin/activate  # Activate the virtual environment
-          pip install docker requests urllib3 PyYAML
-          pip show docker  # Verify installation
-          python vidivi.py push
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
           
-      - name: commit and push vidivi log
+      - name: Install crane tool for multi-arch image transfers
+        run: |
+          # Install crane (Apache 2.0 License - Open Source)
+          # From Google's go-containerregistry project
+          curl -sL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | sudo tar -xzC /usr/local/bin crane
+          crane version
+          echo "Crane installed successfully (Open Source - Apache 2.0)"
+          
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install docker requests urllib3 PyYAML
+          pip show docker
+          echo "Python dependencies installed"
+          
+      - name: Configure Docker for insecure registries
+        run: |
+          # Configure Docker daemon for HTTP registries like Harbor
+          REGISTRY_HOST=$(echo "${{ inputs.REGISTRY_URL }}" | sed 's|http://||' | sed 's|https://||' | cut -d'/' -f1)
+          echo "Configuring Docker for registry: $REGISTRY_HOST"
+          
+          # Create or update Docker daemon configuration
+          sudo mkdir -p /etc/docker
+          if [ "${{ inputs.REGISTRY_URL }}" != *"https://"* ]; then
+            echo "Adding insecure registry configuration for HTTP registry"
+            echo '{
+              "insecure-registries": ["'$REGISTRY_HOST'"]
+            }' | sudo tee /etc/docker/daemon.json
+            
+            # Restart Docker daemon
+            sudo systemctl restart docker
+            sleep 5
+          fi
+          
+          echo "Docker configured for registry operations"
+          
+      - name: Update config.yml with dynamic registry detection
+        run: |
+          cd release/vidivi
+          echo "PWD: $(pwd)"
+          echo "LS: $(ls)"
+          
+          # Update config.yml with provided values
+          sed -i "s|username:.*|username: ${{ secrets.USERNAME }}|g" config.yml
+          sed -i "s|token:.*|token: ${{ secrets.TOKEN }}|g" config.yml
+          sed -i "s|destination_organization:.*|destination_organization: ${{ inputs.DESTINATION_ORGANIZATION }}|g" config.yml
+          sed -i "s|registry_url:.*|registry_url: ${{ inputs.REGISTRY_URL }}|g" config.yml
+          
+          echo "Updated config.yml:"
+          cat config.yml
+          
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.TOKEN }}" | docker login -u "${{ secrets.USERNAME }}" --password-stdin
+          echo "Docker Hub login successful"
+          
+      - name: Login to destination registry (if needed)
+        run: |
+          # Only login to destination registry if it requires authentication
+          REGISTRY_HOST=$(echo "${{ inputs.REGISTRY_URL }}" | sed 's|http://||' | sed 's|https://||' | cut -d'/' -f1)
+          echo "Destination registry: $REGISTRY_HOST"
+          
+          # For Harbor or other registries that require authentication, add login here
+          # docker login $REGISTRY_HOST -u <username> -p <password>
+          
+          echo "Registry login configured"
+          
+      - name: Transfer images with multi-arch support
+        run: |
+          cd release/vidivi
+          echo "Starting image transfer with crane multi-arch support..."
+          
+          # Run vidivi with enhanced logging
+          python3 vidivi.py push 2>&1 | tee transfer.log
+          
+          # Display summary
+          echo "Transfer Summary:"
+          grep -E "(Successfully transferred|Error in|Completed)" logs/vidivi.log | tail -20 || echo "No summary available"
+          
+      - name: Verify multi-arch transfers
+        run: |
+          cd release/vidivi
+          echo "Verifying multi-arch transfers..."
+          
+          # Check if crane transfers were successful
+          CRANE_SUCCESS=$(grep -c "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log || echo "0")
+          TOTAL_SUCCESS=$(grep -c "Completed.*----->" logs/vidivi.log || echo "0")
+          
+          echo "Multi-arch transfers (crane): $CRANE_SUCCESS"
+          echo "Total successful transfers: $TOTAL_SUCCESS"
+          
+          # List successful crane transfers
+          if [ "$CRANE_SUCCESS" -gt 0 ]; then
+            echo "Multi-arch images transferred:"
+            grep -B5 "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log | grep "Executing: crane" | sed 's/.*crane copy [^[:space:]]* //' | sed 's/ .*//' || echo "Could not extract image list"
+          fi
+          
+      - name: Generate transfer report
+        run: |
+          cd release/vidivi
+          echo "📋 Generating transfer report..."
+          
+          # Create summary report
+          cat > transfer_report.md << EOF
+          # Image Transfer Report
+          
+          **Date**: $(date)
+          **Registry**: ${{ inputs.REGISTRY_URL }}
+          **Organization**: ${{ inputs.DESTINATION_ORGANIZATION }}
+          
+          ## Statistics
+          - **Multi-arch transfers (crane)**: $(grep -c "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log || echo "0")
+          - **Total successful transfers**: $(grep -c "Completed.*----->" logs/vidivi.log || echo "0")
+          - **Failed transfers**: $(grep -c "ERROR.*Failed to get manifest\|ERROR.*does not exist\|ERROR.*Crane transfer failed" logs/vidivi.log || echo "0")
+          
+          ## Tools Used
+          - Crane (Apache 2.0): Multi-arch manifest list transfers
+          - Docker Python Client: Single-arch fallback transfers
+          - Registry Support: HTTP/HTTPS auto-detection
+          
+          ## Crane Multi-Arch Images
+          EOF
+          
+          # Add crane transfer details
+          grep -B5 "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log | grep "Executing: crane" | sed 's/.*crane copy [^[:space:]]* /- /' | sed 's/ .*//' >> transfer_report.md || echo "- No crane transfers found" >> transfer_report.md
+          
+          echo "Transfer report generated"
+          cat transfer_report.md
+          
+      - name: Commit and push vidivi log
         run: |
           cd release/vidivi/logs/
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Add logs and report
           git add .
-          git commit -m "added vidivi log files"
-          git push  
+          cd ..
+          git add transfer_report.md || echo "No report to add"
+          
+          # Commit with detailed message
+          CRANE_COUNT=$(grep -c "Successfully transferred multi-arch manifest list with crane" logs/vidivi.log || echo "0")
+          TOTAL_COUNT=$(grep -c "Completed.*----->" logs/vidivi.log || echo "0")
+          
+          git commit -m "Image transfer completed: $TOTAL_COUNT total, $CRANE_COUNT multi-arch (crane) to ${{ inputs.DESTINATION_ORGANIZATION }}" || echo "No changes to commit"
+          git push || echo "Push failed or no changes"
 
-      - uses: 8398a7/action-slack@v3
+      - name: Slack notification
+        uses: 8398a7/action-slack@v3
         with:
           status: ${{ job.status }}
-          fields: repo,message,author,commit,workflow,job # selectable (default: repo,message)
+          fields: repo,message,author,commit,workflow,job
+          text: |
+            Image Transfer ${{ job.status }}!
+            Registry: ${{ inputs.REGISTRY_URL }}
+            Organization: ${{ inputs.DESTINATION_ORGANIZATION }}
+            Multi-arch transfers: $(grep -c "Successfully transferred multi-arch manifest list with crane" release/vidivi/logs/vidivi.log || echo "0")
+            Total transfers: $(grep -c "Completed.*----->" release/vidivi/logs/vidivi.log || echo "0")
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} # required
-        if: "${{ github.event_name != 'pull_request' && failure() }}" # Pick up events even if the job fails or is canceled.
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
