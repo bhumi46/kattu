@@ -3,6 +3,11 @@ name: Manual workflow to transfer docker images
 on:
   workflow_call:
     inputs:
+      USERNAME:
+        description: 'Provide registry username (e.g. robot$mosipdev+mosipdev for Harbor)'
+        required: true
+        default: ''
+        type: string
       DESTINATION_ORGANIZATION:
         description: 'Provide Docker Hub destination org'
         required: true
@@ -24,9 +29,6 @@ on:
         default: false
         type: boolean
     secrets:
-      USERNAME:
-        description: 'Provide registry username'
-        required: true
       TOKEN:
         description: 'Provide registry token'
         required: true
@@ -197,11 +199,13 @@ jobs:
           echo "LS: $(ls)"
           
           # Update config.yml with provided values
-          # Use single quotes to prevent shell interpretation of special characters like $
-          USERNAME='${{ secrets.USERNAME }}'
+          # USERNAME is now a regular input, not a secret - no shell escaping issues!
+          USERNAME='${{ inputs.USERNAME }}'
           TOKEN='${{ secrets.TOKEN }}'
           DESTINATION_ORG='${{ inputs.DESTINATION_ORGANIZATION }}'
           REGISTRY_URL='${{ inputs.REGISTRY_URL }}'
+          
+          echo "🔍 USERNAME provided: $USERNAME"
           
           # Update config using variables (prevents $ and other special chars from being interpreted)
           sed -i "s|username:.*|username: ${USERNAME}|g" config.yml
@@ -212,8 +216,10 @@ jobs:
           echo "✅ Updated config.yml:"
           cat config.yml
           
-          # Debug: Show username format (first 10 chars only for security)
-          echo "🔍 Username format check: ${USERNAME:0:10}..."
+          # Debug: Check if $ is preserved in config.yml
+          echo "🔍 Checking username in config.yml:"
+          grep "username:" config.yml
+          echo "✅ Username contains '\$': $(grep 'username:.*\$' config.yml && echo 'YES' || echo 'NO')"
           
       - name: Login to destination registry
         run: |
@@ -226,7 +232,7 @@ jobs:
           if [ "$REGISTRY_TYPE" = "dockerhub" ]; then
             # Login to Docker Hub
             echo "Logging in to Docker Hub..."
-            echo "${{ secrets.TOKEN }}" | docker login -u "${{ secrets.USERNAME }}" --password-stdin
+            echo "${{ secrets.TOKEN }}" | docker login -u "${{ inputs.USERNAME }}" --password-stdin
             echo "✅ Docker Hub login successful"
             
           elif [ "$REGISTRY_TYPE" = "harbor" ] || [ "$REGISTRY_TYPE" = "other" ]; then
@@ -265,8 +271,37 @@ jobs:
             fi
             
             # Login to private registry
-            echo "${{ secrets.TOKEN }}" | docker login $REGISTRY_HOST -u "${{ secrets.USERNAME }}" --password-stdin
-            echo "✅ Private registry login successful"
+            echo "🔐 Attempting login to $REGISTRY_HOST..."
+            
+            # Debug: Check credentials format
+            USERNAME='${{ inputs.USERNAME }}'
+            TOKEN='${{ secrets.TOKEN }}'
+            echo "Username: $USERNAME"
+            echo "Token length: ${#TOKEN}"
+            
+            # Try login with explicit error handling
+            if echo "$TOKEN" | docker login $REGISTRY_HOST -u "$USERNAME" --password-stdin 2>&1 | tee /tmp/docker_login.log; then
+              echo "✅ Private registry login successful"
+            else
+              echo "❌ Login failed. Error details:"
+              cat /tmp/docker_login.log
+              
+              echo ""
+              echo "🔍 Debugging information:"
+              echo "- Registry: $REGISTRY_HOST"
+              echo "- Username: $USERNAME"
+              echo "- Username format: Harbor robot accounts should be: robot\$project+name"
+              echo ""
+              echo "💡 Common issues:"
+              echo "1. Username should be: robot\$mosipdev+robotname (not robot+mosipdev)"
+              echo "2. Token must be the robot account token from Harbor"
+              echo "3. Robot account must have push/pull permissions on mosipdev project"
+              echo ""
+              echo "🧪 Manual test command (run locally):"
+              echo "echo 'YOUR_TOKEN' | docker login harbor.mosip.net -u '$USERNAME' --password-stdin"
+              
+              exit 1
+            fi
             
           else
             echo "❌ ERROR: Unsupported registry type: $REGISTRY_TYPE"
