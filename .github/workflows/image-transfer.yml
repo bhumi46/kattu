@@ -173,7 +173,9 @@ jobs:
           
           # Create or update Docker daemon configuration
           sudo mkdir -p /etc/docker
-          if [ "${{ inputs.REGISTRY_URL }}" != *"https://"* ]; then
+          
+          # Check if URL starts with https:// (proper bash syntax)
+          if [[ "${{ inputs.REGISTRY_URL }}" != https://* ]]; then
             echo "Adding insecure registry configuration for HTTP registry"
             echo '{
               "insecure-registries": ["'$REGISTRY_HOST'"]
@@ -182,6 +184,8 @@ jobs:
             # Restart Docker daemon
             sudo systemctl restart docker
             sleep 5
+          else
+            echo "✅ HTTPS registry detected - no insecure configuration needed"
           fi
           
           echo "✅ Docker configured for registry operations"
@@ -222,12 +226,30 @@ jobs:
             
             # Test connectivity first (especially important for VPN-connected registries)
             echo "Testing connectivity to $REGISTRY_HOST..."
-            if ! timeout 10 nc -z ${REGISTRY_HOST%:*} ${REGISTRY_HOST##*:}; then
-              echo "⚠️  WARNING: Cannot connect to $REGISTRY_HOST - registry may not be accessible"
+            
+            # Extract hostname and port (default to 443 for https, 80 for http)
+            if [[ "$REGISTRY_HOST" == *:* ]]; then
+              # Port is explicitly specified
+              REGISTRY_HOSTNAME="${REGISTRY_HOST%:*}"
+              REGISTRY_PORT="${REGISTRY_HOST##*:}"
+            else
+              # No port specified, use defaults
+              REGISTRY_HOSTNAME="$REGISTRY_HOST"
+              if [[ "$REGISTRY_URL" == https://* ]]; then
+                REGISTRY_PORT="443"
+              else
+                REGISTRY_PORT="80"
+              fi
+            fi
+            
+            echo "Testing connection to $REGISTRY_HOSTNAME:$REGISTRY_PORT..."
+            if ! timeout 10 nc -z "$REGISTRY_HOSTNAME" "$REGISTRY_PORT" 2>/dev/null; then
+              echo "⚠️  WARNING: Cannot connect to $REGISTRY_HOSTNAME:$REGISTRY_PORT - registry may not be accessible"
               if [ "${{ inputs.ENABLE_WIREGUARD }}" = "true" ]; then
                 echo "💡 WireGuard is enabled - checking VPN status..."
                 sudo wg show wg0 || echo "❌ WireGuard interface not active"
               fi
+              echo "⚠️  Proceeding with login attempt anyway..."
             else
               echo "✅ Registry connectivity confirmed"
             fi
