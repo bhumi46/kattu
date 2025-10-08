@@ -197,13 +197,23 @@ jobs:
           echo "LS: $(ls)"
           
           # Update config.yml with provided values
-          sed -i "s|username:.*|username: ${{ secrets.USERNAME }}|g" config.yml
-          sed -i "s|token:.*|token: ${{ secrets.TOKEN }}|g" config.yml
-          sed -i "s|destination_organization:.*|destination_organization: ${{ inputs.DESTINATION_ORGANIZATION }}|g" config.yml
-          sed -i "s|registry_url:.*|registry_url: ${{ inputs.REGISTRY_URL }}|g" config.yml
+          # Use single quotes to prevent shell interpretation of special characters like $
+          USERNAME='${{ secrets.USERNAME }}'
+          TOKEN='${{ secrets.TOKEN }}'
+          DESTINATION_ORG='${{ inputs.DESTINATION_ORGANIZATION }}'
+          REGISTRY_URL='${{ inputs.REGISTRY_URL }}'
+          
+          # Update config using variables (prevents $ and other special chars from being interpreted)
+          sed -i "s|username:.*|username: ${USERNAME}|g" config.yml
+          sed -i "s|token:.*|token: ${TOKEN}|g" config.yml
+          sed -i "s|destination_organization:.*|destination_organization: ${DESTINATION_ORG}|g" config.yml
+          sed -i "s|registry_url:.*|registry_url: ${REGISTRY_URL}|g" config.yml
           
           echo "✅ Updated config.yml:"
           cat config.yml
+          
+          # Debug: Show username format (first 10 chars only for security)
+          echo "🔍 Username format check: ${USERNAME:0:10}..."
           
       - name: Login to destination registry
         run: |
