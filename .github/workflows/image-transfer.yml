@@ -309,63 +309,64 @@ jobs:
             exit 1
           fi
           
-      - name: Transfer images with crane (simplified approach)
+      - name: Transfer images with crane (simplified multi-arch support)
         run: |
           cd release/vidivi
-          echo "🚀 Starting image transfer with crane (handles all architectures automatically)..."
+          echo "🚀 Starting image transfer with crane (unified approach)..."
           
           # Run vidivi with enhanced logging
           python3 vidivi.py push 2>&1 | tee transfer.log
           
-          # Display summary from the new log format
-          echo ""
+          # Display summary
           echo "📊 Transfer Summary:"
-          echo "==================="
-          grep -E "(Successfully transferred|Completed processing)" logs/vidivi.log | tail -20 || echo "No transfers found"
+          grep -E "(Successfully transferred image with crane|Completed processing|Error)" logs/vidivi.log | tail -30 || echo "No summary available"
           
-      - name: Verify transfers with new log patterns
+      - name: Verify crane transfers
         run: |
           cd release/vidivi
-          echo "🔍 Verifying image transfers..."
+          echo "🔍 Verifying crane transfers..."
           
-          # NEW: Count successful crane transfers (matches new simplified script)
+          # Updated patterns to match simplified script output - remove newlines
           CRANE_SUCCESS=$(grep -c "Successfully transferred image with crane" logs/vidivi.log 2>/dev/null || echo "0")
+          CRANE_SUCCESS=$(echo "$CRANE_SUCCESS" | tr -d '\n')
           
-          # NEW: Count completed transfers (matches new simplified script)
-          TOTAL_SUCCESS=$(grep -c "Completed processing.*to" logs/vidivi.log 2>/dev/null || echo "0")
+          TOTAL_SUCCESS=$(grep -c "Completed processing" logs/vidivi.log 2>/dev/null || echo "0")
+          TOTAL_SUCCESS=$(echo "$TOTAL_SUCCESS" | tr -d '\n')
           
-          # Count failed transfers
-          FAILED_TRANSFERS=$(grep -c "ERROR.*Crane transfer failed\|ERROR.*does not exist" logs/vidivi.log 2>/dev/null || echo "0")
+          FAILED=$(grep -c "Error in crane transfer\|Crane transfer failed" logs/vidivi.log 2>/dev/null || echo "0")
+          FAILED=$(echo "$FAILED" | tr -d '\n')
           
-          echo "✅ Successful crane transfers: $CRANE_SUCCESS"
-          echo "✅ Total completed transfers: $TOTAL_SUCCESS"
-          echo "❌ Failed transfers: $FAILED_TRANSFERS"
+          echo "✅ Crane transfers: $CRANE_SUCCESS"
+          echo "✅ Total completed: $TOTAL_SUCCESS"
+          echo "❌ Failed: $FAILED"
           
-          # List successfully transferred images
-          if [ "$TOTAL_SUCCESS" -gt 0 ]; then
+          # List all transferred images
+          if [ "$CRANE_SUCCESS" -gt 0 ] 2>/dev/null; then
             echo ""
-            echo "🎉 Successfully transferred images:"
-            echo "===================================="
-            grep "Completed processing" logs/vidivi.log | sed 's/.*Completed processing /- /' || echo "Could not extract image list"
+            echo "🚀 Images transferred with crane:"
+            grep "Image available at:" logs/vidivi.log | sed 's/.*Image available at: /  - /' || echo "  - Could not extract image list"
           fi
           
-          # Show failed transfers if any
-          if [ "$FAILED_TRANSFERS" -gt 0 ]; then
-            echo ""
-            echo "⚠️  Failed transfers:"
-            echo "===================="
-            grep "ERROR.*Crane transfer failed\|ERROR.*does not exist" logs/vidivi.log | head -10
+          # Exit with error if all transfers failed
+          if [ "$TOTAL_SUCCESS" -eq 0 ] 2>/dev/null && [ "$FAILED" -gt 0 ] 2>/dev/null; then
+            echo "❌ ERROR: All image transfers failed!"
+            exit 1
           fi
           
-      - name: Generate transfer report with correct patterns
+      - name: Generate transfer report
         run: |
           cd release/vidivi
           echo "📋 Generating transfer report..."
           
-          # Count transfers using NEW log patterns from simplified script
+          # Count successes and failures with updated patterns - clean up output
           CRANE_SUCCESS=$(grep -c "Successfully transferred image with crane" logs/vidivi.log 2>/dev/null || echo "0")
-          TOTAL_SUCCESS=$(grep -c "Completed processing.*to" logs/vidivi.log 2>/dev/null || echo "0")
-          FAILED_TRANSFERS=$(grep -c "ERROR.*Crane transfer failed\|ERROR.*does not exist" logs/vidivi.log 2>/dev/null || echo "0")
+          CRANE_SUCCESS=$(echo "$CRANE_SUCCESS" | tr -d '\n')
+          
+          TOTAL_SUCCESS=$(grep -c "Completed processing" logs/vidivi.log 2>/dev/null || echo "0")
+          TOTAL_SUCCESS=$(echo "$TOTAL_SUCCESS" | tr -d '\n')
+          
+          FAILED=$(grep -c "Error in crane transfer\|Crane transfer failed" logs/vidivi.log 2>/dev/null || echo "0")
+          FAILED=$(echo "$FAILED" | tr -d '\n')
           
           # Create summary report
           cat > transfer_report.md << EOF
@@ -379,30 +380,21 @@ jobs:
           
           ## Statistics
           - **Crane transfers**: $CRANE_SUCCESS
-          - **Total completed transfers**: $TOTAL_SUCCESS
-          - **Failed transfers**: $FAILED_TRANSFERS
+          - **Total completed**: $TOTAL_SUCCESS
+          - **Failed transfers**: $FAILED
           
           ## Tools Used
-          - ✅ Crane (Apache 2.0): Universal image transfer (handles all architectures automatically)
+          - ✅ Crane (Apache 2.0): Universal container image transfers
+          - ✅ Automatically handles single-arch and multi-arch images
           - ✅ Registry Support: HTTP/HTTPS auto-detection
           
-          ## Successfully Transferred Images
+          ## Transferred Images
           EOF
           
-          # Add successfully transferred images
-          if grep -q "Completed processing" logs/vidivi.log 2>/dev/null; then
-            grep "Completed processing" logs/vidivi.log | sed 's/.*Completed processing /- /' >> transfer_report.md
-          else
-            echo "- No completed transfers found" >> transfer_report.md
-          fi
+          # Add transferred image details
+          grep "Image available at:" logs/vidivi.log | sed 's/.*Image available at: /- /' >> transfer_report.md || echo "- No successful transfers found" >> transfer_report.md
           
-          # Add failed transfers section if any
-          if [ "$FAILED_TRANSFERS" -gt 0 ]; then
-            echo "" >> transfer_report.md
-            echo "## Failed Transfers" >> transfer_report.md
-            grep "ERROR.*Crane transfer failed\|ERROR.*does not exist" logs/vidivi.log | sed 's/.*ERROR/- ERROR/' | head -10 >> transfer_report.md
-          fi
-          
+          echo ""
           echo "✅ Transfer report generated"
           cat transfer_report.md
           
@@ -417,13 +409,17 @@ jobs:
           cd ..
           git add transfer_report.md || echo "No report to add"
           
-          # Commit with detailed message using NEW patterns
-          TOTAL_COUNT=$(grep -c "Completed processing.*to" logs/vidivi.log 2>/dev/null || echo "0")
+          # Commit with detailed message using updated patterns - clean variables
+          TOTAL_COUNT=$(grep -c "Completed processing" logs/vidivi.log 2>/dev/null || echo "0")
+          TOTAL_COUNT=$(echo "$TOTAL_COUNT" | tr -d '\n')
           
-          git commit -m "Image transfer completed: $TOTAL_COUNT images transferred to ${{ inputs.DESTINATION_ORGANIZATION }}" || echo "No changes to commit"
+          FAILED_COUNT=$(grep -c "Error in crane transfer\|Crane transfer failed" logs/vidivi.log 2>/dev/null || echo "0")
+          FAILED_COUNT=$(echo "$FAILED_COUNT" | tr -d '\n')
+          
+          git commit -m "Image transfer: $TOTAL_COUNT completed, $FAILED_COUNT failed to ${{ inputs.DESTINATION_ORGANIZATION }}" || echo "No changes to commit"
           git push || echo "Push failed or no changes"
 
-      - name: Slack notification with correct counts
+      - name: Slack notification
         uses: 8398a7/action-slack@v3
         with:
           status: ${{ job.status }}
@@ -434,8 +430,8 @@ jobs:
             Registry URL: ${{ inputs.REGISTRY_URL }}
             Organization: ${{ inputs.DESTINATION_ORGANIZATION }}
             WireGuard VPN: ${{ inputs.ENABLE_WIREGUARD && 'Enabled' || 'Disabled' }}
-            Crane transfers: $(grep -c "Successfully transferred image with crane" release/vidivi/logs/vidivi.log 2>/dev/null || echo "0")
-            Total completed: $(grep -c "Completed processing.*to" release/vidivi/logs/vidivi.log 2>/dev/null || echo "0")
+            Completed: $(grep -c "Completed processing" release/vidivi/logs/vidivi.log || echo "0")
+            Failed: $(grep -c "Error in crane transfer" release/vidivi/logs/vidivi.log || echo "0")
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         if: always()
