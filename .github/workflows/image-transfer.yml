@@ -16,12 +16,12 @@ on:
       REGISTRY_URL:
         description: 'Provide destination registry URL'
         required: true
-        default: 'http://10.0.3.128:8080'
+        default: 'https://index.docker.io/v1/'
         type: string
       REGISTRY_TYPE:
         description: 'Registry type (dockerhub, harbor, other)'
         required: true
-        default: 'harbor'
+        default: 'dockerhub'
         type: string
       ENABLE_WIREGUARD:
         description: 'Enable WireGuard VPN for private networks'
